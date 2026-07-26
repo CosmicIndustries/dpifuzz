@@ -128,6 +128,31 @@ change it.
 
 ---
 
+## Share results
+
+Results are only meaningful next to the network they came from, so the corpus is
+keyed by country and ASN and never averaged across them.
+
+```bash
+./dpifuzz.py share --country RU --asn AS12389 --isp "Rostelecom" --medium fiber
+./dpifuzz.py merge 'results/*.json'
+./dpifuzz.py corpus --network RU
+```
+
+`share` writes `results/<CC>-<ASN>-<YYYY-MM>.json` containing strategy strings,
+scores, a hash of the domain list, and the network metadata you passed — no IP,
+no hostnames you visited, no timestamp finer than the month.
+
+The domain-list hash is what keeps the corpus honest: if two runs measured
+different targets, `merge` says so and keeps them apart instead of averaging a
+120-domain score against a 417-domain one.
+
+Contributions welcome — see [CONTRIBUTING.md](CONTRIBUTING.md). Results where
+*nothing* worked, or where passthrough already scored 1.0, are as useful as
+wins.
+
+---
+
 ## Files
 
 | | |
