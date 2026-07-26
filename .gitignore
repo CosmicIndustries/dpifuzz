@@ -1,0 +1,13 @@
+memo.json
+corpus.json
+corpus.demo.json
+state.json
+run.log
+sim.log
+strategies.txt
+selected.txt
+domains.txt
+__pycache__/
+apk/
+*.tmp
+.gh_token
