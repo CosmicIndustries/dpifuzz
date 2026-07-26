@@ -518,6 +518,9 @@ def main():
     co = sub.add_parser("corpus")
     co.add_argument("--network", help="filter, e.g. RU or AS12389")
     co.add_argument("-n", type=int, default=8)
+    co.add_argument("--consistency", action="store_true",
+                    help="which strategies hold up across networks (rank aggregation)")
+    co.add_argument("--min-networks", type=int, default=2)
 
     a = ap.parse_args()
 
@@ -625,6 +628,44 @@ def cmd_corpus(a, hosts):
     if not p.exists():
         sys.exit("no corpus.json — run `merge` on some shared result files first")
     corpus = json.loads(p.read_text())
+
+    if a.consistency:
+        # Which strategies generalise? Rank within each network, then aggregate
+        # ranks — raw scores are not comparable across networks (0.4 on heavy
+        # filtering vs 1.0 on an open uplink averages to nothing real), but
+        # relative ordering within a network is.
+        #
+        # Networks with zero spread are dropped: if everything ties, the ranking
+        # is arbitrary and would inject pure noise into the aggregate.
+        per: dict[str, list[float]] = {}
+        used = flat = 0
+        for tag, e in corpus.items():
+            rows = sorted(e["results"].items(), key=lambda kv: -kv[1]["mean"])
+            vals = [r["mean"] for _, r in rows]
+            if len(rows) < 2 or max(vals) - min(vals) < 1e-9:
+                flat += 1; continue
+            used += 1
+            for i, (cfg, _) in enumerate(rows):
+                per.setdefault(cfg, []).append(1 - i / (len(rows) - 1))
+        if not used:
+            sys.exit(f"no network in the corpus has any spread ({flat} flat) — "
+                     "nothing to compare. Flat corpora mean nobody is being "
+                     "filtered, which is itself the answer.")
+        rank = sorted(((statistics.median(v), len(v), c) for c, v in per.items()
+                       if len(v) >= a.min_networks), reverse=True)
+        print(f"cross-network consistency over {used} network(s) with spread"
+              + (f"  ({flat} flat, excluded)" if flat else ""))
+        print(f"\n{'pctile':>7} {'nets':>5}  {'shape':<30} strategy")
+        print("-" * 100)
+        for pc, n, c in rank[:a.n]:
+            print(f"{pc:7.2f} {n:>5}  {shape(c):<30} {(c or '<empty>')[:44]}")
+        if not rank:
+            print(f"  nothing measured on >= {a.min_networks} networks yet")
+        print("\nPercentile is the median position within each network, 1.0 = best.\n"
+              "High percentile across many networks = generalises. High on one\n"
+              "network only = tuned to that DPI deployment, and probably to its TTL.")
+        return
+
     want = a.network
     for tag, e in sorted(corpus.items()):
         if want and want.lower() not in tag.lower(): continue
@@ -634,8 +675,8 @@ def cmd_corpus(a, hosts):
         rows = sorted(e["results"].items(), key=lambda kv: -kv[1]["mean"])[:a.n]
         for cfg, r in rows:
             print(f"  {r['mean']:.4f} n={r['n']:<3} {shape(cfg):<30} {cfg[:46]}")
-    print("\nScores are per-network. A strategy that wins on one DPI deployment\n"
-          "says nothing about another — pick the block matching your country/ASN.")
+    print("\nRaw scores are per-network. For what holds up across deployments:"
+          "\n  ./dpifuzz.py corpus --consistency")
 
 
 if __name__ == "__main__":
