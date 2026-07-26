@@ -505,16 +505,137 @@ def main():
     sub.add_parser("ingest")
     rp = sub.add_parser("report"); rp.add_argument("-n", type=int, default=12)
     sub.add_parser("export")
+
+    sh = sub.add_parser("share")
+    sh.add_argument("--country", help="ISO code, e.g. RU, IR, TR, US")
+    sh.add_argument("--asn", help="e.g. AS12389 — look yours up at https://bgp.tools")
+    sh.add_argument("--isp"); sh.add_argument("--notes")
+    sh.add_argument("--medium", choices=["fiber", "cable", "dsl", "mobile", "wifi", "other"])
+    sh.add_argument("--min-obs", type=int, default=2)
+    sh.add_argument("-o")
+
+    mg = sub.add_parser("merge"); mg.add_argument("files", nargs="+")
+    co = sub.add_parser("corpus")
+    co.add_argument("--network", help="filter, e.g. RU or AS12389")
+    co.add_argument("-n", type=int, default=8)
+
     a = ap.parse_args()
 
     BYEDPI = a.binary
     _, hosts = load_data()
     fn = {"doctor": cmd_doctor, "run": cmd_run, "emit": cmd_emit,
-          "ingest": cmd_ingest, "report": cmd_report, "export": cmd_export}[a.cmd]
+          "ingest": cmd_ingest, "report": cmd_report, "export": cmd_export,
+          "share": cmd_share, "merge": cmd_merge, "corpus": cmd_corpus}[a.cmd]
     try:
         asyncio.run(fn(a, hosts)) if asyncio.iscoroutinefunction(fn) else fn(a, hosts)
     except KeyboardInterrupt:
         print("\nstopped — memo.json keeps every observation", file=sys.stderr)
+
+
+
+# ------------------------------------------------------------------ sharing
+SCHEMA = 1
+
+
+def byedpi_version() -> str:
+    import subprocess
+    for args in (["-v"], ["--version"], ["-h"]):
+        try:
+            r = subprocess.run([BYEDPI, *args], capture_output=True, text=True, timeout=5)
+            m = re.search(r"\d+\.\d+\.\d+(?:\s*\([0-9a-f]+\))?", r.stdout + r.stderr)
+            if m: return m.group(0)
+        except Exception:
+            pass
+    return "unknown"
+
+
+def fingerprint(hosts: list[str]) -> dict:
+    """Two runs are only comparable if they measured the same targets the same
+    way. This is what stops a 120-domain result being averaged against a
+    417-domain one — the mistake that made every early leaderboard meaningless."""
+    h = hashlib.sha256("\n".join(sorted(hosts)).encode()).hexdigest()[:16]
+    return {"domains_sha256": h, "domain_count": len(hosts),
+            "byedpi": byedpi_version(), "schema": SCHEMA}
+
+
+def cmd_share(a, hosts):
+    memo = Memo(HERE / "memo.json")
+    rows = [{"cfg": r["c"], "mean": round(statistics.mean(r["s"]), 4),
+             "n": len(r["s"]),
+             "sd": round(statistics.pstdev(r["s"]), 4) if len(r["s"]) > 1 else None}
+            for r in memo.d.values() if len(r["s"]) >= a.min_obs]
+    if not rows:
+        sys.exit(f"nothing with >= {a.min_obs} observations yet — run `run` first")
+    rows.sort(key=lambda x: -x["mean"])
+    doc = {"schema": SCHEMA, "created": __import__("datetime").date.today().isoformat(),
+           "fingerprint": fingerprint(hosts),
+           "network": {"country": a.country, "asn": a.asn, "isp": a.isp,
+                       "medium": a.medium, "notes": a.notes},
+           "results": rows}
+    out = Path(a.o) if a.o else (HERE / "results" /
+          f"{a.country or 'XX'}-{(a.asn or 'ASxxxx')}-"
+          f"{doc['created'][:7]}.json")
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(json.dumps(doc, indent=2))
+    print(f"{len(rows)} results -> {out}")
+    print("\nContains: strategy strings, scores, domain-list hash, and the network\n"
+          "metadata you passed. No IP address, no hostnames you visited, no\n"
+          "timestamps beyond the month. Read it before sharing if unsure.")
+    if not a.asn:
+        print("\nNo --asn given. Results are network-specific and close to useless\n"
+              "without it — look yours up at https://bgp.tools and re-run.")
+
+
+def cmd_merge(a, hosts):
+    """Import shared results into a corpus, keyed by network. Never averaged
+    across networks: a strategy is a claim about one DPI deployment."""
+    corpus_p = HERE / "corpus.json"
+    corpus = json.loads(corpus_p.read_text()) if corpus_p.exists() else {}
+    mine = fingerprint(hosts)["domains_sha256"]
+    added = skipped = 0
+    for f in a.files:
+        for path in sorted(Path(".").glob(f)) or [Path(f)]:
+            try: doc = json.loads(Path(path).read_text())
+            except Exception as e:
+                print(f"  skip {path}: {e}"); continue
+            fp = doc.get("fingerprint", {})
+            net = doc.get("network", {})
+            tag = f"{net.get('country') or 'XX'}/{net.get('asn') or 'ASxxxx'}"
+            if fp.get("domains_sha256") != mine:
+                print(f"  {path}: different domain list "
+                      f"({fp.get('domain_count')} domains, hash "
+                      f"{fp.get('domains_sha256')}) — kept separate, not comparable "
+                      f"to your local scores")
+                skipped += 1
+            e = corpus.setdefault(tag, {"network": net, "fingerprints": [], "results": {}})
+            if fp.get("domains_sha256") not in e["fingerprints"]:
+                e["fingerprints"].append(fp.get("domains_sha256"))
+            for r in doc.get("results", []):
+                cur = e["results"].get(r["cfg"])
+                if not cur or r["n"] > cur["n"]:
+                    e["results"][r["cfg"]] = {"mean": r["mean"], "n": r["n"]}
+            added += len(doc.get("results", []))
+    corpus_p.write_text(json.dumps(corpus, indent=2))
+    print(f"{added} results across {len(corpus)} networks -> corpus.json"
+          + (f"  ({skipped} file(s) with a different domain list)" if skipped else ""))
+
+
+def cmd_corpus(a, hosts):
+    p = HERE / "corpus.json"
+    if not p.exists():
+        sys.exit("no corpus.json — run `merge` on some shared result files first")
+    corpus = json.loads(p.read_text())
+    want = a.network
+    for tag, e in sorted(corpus.items()):
+        if want and want.lower() not in tag.lower(): continue
+        net = e.get("network", {})
+        head = f"{tag}  {net.get('isp') or ''} {net.get('medium') or ''}".strip()
+        print(f"\n{head}" + (f"   [{net['notes']}]" if net.get("notes") else ""))
+        rows = sorted(e["results"].items(), key=lambda kv: -kv[1]["mean"])[:a.n]
+        for cfg, r in rows:
+            print(f"  {r['mean']:.4f} n={r['n']:<3} {shape(cfg):<30} {cfg[:46]}")
+    print("\nScores are per-network. A strategy that wins on one DPI deployment\n"
+          "says nothing about another — pick the block matching your country/ASN.")
 
 
 if __name__ == "__main__":
