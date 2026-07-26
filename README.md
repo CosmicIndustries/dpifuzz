@@ -43,6 +43,17 @@ band, and anything inside it is reported as tied rather than ranked.
 
 ## Use
 
+Terminal UI — live view of a generation being measured, ranked population,
+per-strategy detail:
+
+```bash
+./tui.py             # r run, p pause, e emit, ↑↓ select, ⏎ detail, q quit
+./tui.py --demo      # synthetic scores, no byedpi — to try the interface
+./tui.py --auto      # start searching immediately
+```
+
+Or the CLI:
+
 ```bash
 ./dpifuzz.py doctor          # which targets are real, which are structurally dead
 ./dpifuzz.py run             # autonomous GA — breeds and measures locally
