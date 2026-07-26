@@ -1,0 +1,58 @@
+name: Result submission
+description: Share dpifuzz results from your network
+title: "[results] COUNTRY / ASN"
+labels: ["results"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Paste the JSON from `./dpifuzz.py share`, or open a PR adding it to
+        `results/` — either works.
+
+        The file has no IP address, no hostnames you visited, and no timestamp
+        finer than the month. Open it first if you want to check.
+  - type: input
+    id: network
+    attributes:
+      label: Country and ASN
+      description: Find your ASN at https://bgp.tools — results are network-specific and near-useless without it
+      placeholder: RU / AS12389
+    validations:
+      required: true
+  - type: dropdown
+    id: outcome
+    attributes:
+      label: Outcome
+      options:
+        - Found strategies that clearly beat passthrough
+        - Everything tied — passthrough already works, nothing is filtered
+        - Nothing worked; still blocked
+        - Mixed / unsure
+    validations:
+      required: true
+  - type: textarea
+    id: json
+    attributes:
+      label: Results JSON
+      description: Contents of results/*.json
+      render: json
+    validations:
+      required: true
+  - type: textarea
+    id: notes
+    attributes:
+      label: What is being blocked, and how
+      description: |
+        Output of `./dpifuzz.py doctor` is ideal. Otherwise: is it SNI-based,
+        an IP blackhole, DNS poisoning, or throttling? Which sites?
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before submitting
+      options:
+        - label: Domain list matches the one from `./dpifuzz.py export` (otherwise the denominators differ and results can't be compared)
+          required: true
+        - label: At least 2 observations per strategy
+          required: true
+        - label: I've read the JSON and am happy for it to be public
+          required: true
