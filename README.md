@@ -183,3 +183,56 @@ wins.
 | `memo.json` | every observation, created on first run |
 
 Licence: GPL-3.0, matching ByeByeDPI.
+
+
+---
+
+## Reproducing collateral damage
+
+`dpisim.py` stands up a naive SNI-inspecting proxy locally — no real TCP/TLS
+stack, which is exactly the middlebox class upstream warns `oob` and `tlsrec`
+will confuse.
+
+```bash
+./dpisim.py --block en.wikipedia.org --block pypi.org -v
+python3 simtest.py
+```
+
+```
+  passthrough (none)   blocked:RST   allowed:OK
+  -d1+s                blocked:RST   allowed:RST   (collateral damage)
+  -o1+s                blocked:RST   allowed:RST   (collateral damage)
+  -d1 -s1+s -s3+s      blocked:RST   allowed:RST   (collateral damage)
+  -At,s -d1 -s1+s      blocked:RST   allowed:OK
+```
+
+The last two rows are the point. Same methods; the one with an empty default
+group leaves the non-blocked host alone. This is why desync belongs behind a
+trigger rather than in the default arm.
+
+**It cannot test bypass.** Over loopback, TCP coalesces byedpi's separate
+`write()` calls into a single `read()`, so the SNI survives in the first segment
+and no split gets past — measured, 1 of 21 connections had no SNI. Segmentation
+based evasion needs a real network path; there is no local shortcut.
+
+## Example: an unfiltered network
+
+For contrast, a real run on a residential fibre line with no filtering
+(`results/US-AS11550-2026-07.json`):
+
+```
+admissible 119/120 targets
+
+  score   n  shape                     strategy
+ 1.0000   1= 4grp dfoqrs               -n "google.com" -Qr -f-205 -a1 -As ...
+ 1.0000   1= 5grp dfoqrs               -f-200 -Qr -s3:5+sm -a1 -As -d1 ...
+ 1.0000   1= 2grp drs                  -d1 -d3+s -s6+s -d9+s -s12+s ...
+
+noise band ±0.0000 — 5 strategies statistically tied at the top
+Spread has collapsed inside the noise band. Nothing distinguishes the
+survivors; take the shortest one.
+```
+
+A five-group strategy with fake-SNI spoofing and a two-group split ladder score
+identically, because neither is doing anything. This is the tool working: it
+refuses to rank, and says so.
