@@ -136,8 +136,16 @@ keyed by country and ASN and never averaged across them.
 ```bash
 ./dpifuzz.py share --country RU --asn AS12389 --isp "Rostelecom" --medium fiber
 ./dpifuzz.py merge 'results/*.json'
-./dpifuzz.py corpus --network RU
+./dpifuzz.py corpus --network RU          # raw scores for one network
+./dpifuzz.py corpus --consistency         # what holds up across all of them
 ```
+
+`--consistency` ranks strategies *within* each network, then aggregates the
+ranks. Raw scores don't average across deployments — 0.4 under heavy filtering
+and 1.0 on an open uplink mean nothing combined — but relative ordering does.
+Networks with no spread are dropped, since an arbitrary ranking would only add
+noise. A strategy scoring high across many networks generalises; one that wins
+on a single network is tuned to that DPI, usually via its TTL.
 
 `share` writes `results/<CC>-<ASN>-<YYYY-MM>.json` containing strategy strings,
 scores, a hash of the domain list, and the network metadata you passed — no IP,
